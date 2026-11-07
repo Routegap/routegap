@@ -30,7 +30,7 @@ jobs:
 
       - name: Capture yesterday's departures
         env:
-          AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY }}
+          AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY || secrets.AERODATABOXKEY }}
           AERODATABOX_HOST: ${{ vars.AERODATABOX_HOST }}
           AIRPORTS: ${{ vars.AIRPORTS }}
           DAY: ${{ github.event.inputs.day }}
