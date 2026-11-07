@@ -35,8 +35,8 @@ st.write("Open data on Indian domestic flights, built from ADS-B signals.")
 st.caption(f"Source: adsb.lol (ODbL) · {days} days, {first_day} to {last_day} · "
            f"{len(df)} flights with both ends known")
 
-tab_overview, tab_gaps, tab_map, tab_find, tab_plane = st.tabs(
-    ["Overview", "Route gaps", "Route map", "Find a flight", "Aircraft day"])
+tab_overview, tab_report, tab_gaps, tab_map, tab_find, tab_plane = st.tabs(
+    ["Overview", "Route report", "Route gaps", "Route map", "Find a flight", "Aircraft day"])
 
 # =====================================================================
 with tab_overview:
@@ -83,6 +83,112 @@ with tab_overview:
         "don't appear here. That doesn't mean they aren't flying."
     )
     st.caption(f"Airports seen so far: {df['origin'].nunique()}")
+
+# =====================================================================
+with tab_report:
+
+    st.header("Route report")
+    st.write("Pick a route to see which airlines fly it, how punctual each one has been, "
+             "and how they compare.")
+
+    RATING_MIN = 20       # flights we must have matched before giving an airline a rating
+    DGCA_LATE = 15        # DGCA counts a flight late if it leaves the gate 15+ min after schedule
+
+    matched_files = sorted(glob.glob("data/matched/*/matched_*.csv"))
+    if not matched_files:
+        st.info("Punctuality data starts once schedules have been matched. Check back soon.")
+    else:
+        m = pd.concat([pd.read_csv(f) for f in matched_files], ignore_index=True)
+        m["route"] = m["origin"] + " → " + m["dest"]
+        sched_days = len(matched_files)
+
+        # We see wheels-off, not pushback. Taxiing takes longer at some airports, so each
+        # airport gets a taxi allowance: the delay of its fastest 20% of takeoffs (roughly
+        # the flights that left the gate on time), kept between 5 and 25 minutes.
+        ok_all = m[m["result"] == "matched"]
+        taxi = ok_all.groupby("origin")["runway_delay_min"].quantile(0.2).clip(5, 25).round()
+
+        # busiest routes first in the picker
+        routes = m["route"].value_counts().index
+        pick = st.selectbox("Route (type to search, e.g. BOM → BLR)", routes, key="report_route")
+        r = m[m["route"] == pick]
+        done = r[r["result"] == "matched"]
+        o, d = pick.split(" → ")
+        allowance = taxi.get(o, 15)
+
+        st.subheader(pick)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Scheduled flights a day", f"{len(r) / sched_days:.0f}")
+        c2.metric("Airlines", r["airline"].nunique())
+        c3.metric("Flights we could check", f"{len(done) / len(r):.0%}",
+                  help="Share of scheduled flights we matched to a real ADS-B flight. "
+                       "The rest weren't seen by a receiver; that doesn't mean they didn't fly.")
+
+        # typical time in the air on this route, from flights where we saw both ends
+        seen = everything[(everything["origin"] == o) & (everything["dest"] == d)
+                          & (everything["grade"] == "complete")]
+        air_min = ((seen["touchdown_utc"] - seen["wheels_off_utc"]).dt.total_seconds() / 60).median()
+
+        rows = []
+        for airline, a in r.groupby("airline"):
+            ok = a[a["result"] == "matched"]
+            late = ok["runway_delay_min"] - allowance        # delay after taking off taxi time
+            row = {
+                "Airline": airline,
+                "Flights a day": round(len(a) / sched_days, 1),
+                "Share of route (%)": round(len(a) / len(r) * 100),
+                "Checked": len(ok),
+                "On time (%)": round((late <= DGCA_LATE).mean() * 100) if len(ok) else None,
+                "Typical delay (min)": max(round(late.median()), 0) if len(ok) else None,
+                "Cancelled": int((a["result"] == "cancelled").sum()),
+                "Rating": None,
+            }
+            # the rating: only with enough flights, and built from parts people can see
+            if len(ok) >= RATING_MIN:
+                on_time = (late <= DGCA_LATE).mean()                               # 0 to 1
+                delay_score = min(max(1 - late.median() / 60, 0), 1)               # 0 min = 1, 60+ = 0
+                frequency = len(a) / len(r)                                        # 0 to 1
+                row["Rating"] = round(5 * (0.6 * on_time + 0.25 * delay_score + 0.15 * frequency), 1)
+            rows.append(row)
+
+        table = pd.DataFrame(rows).sort_values("Flights a day", ascending=False)
+        for col in ["On time (%)", "Typical delay (min)"]:
+            table[col] = table[col].astype("Int64")       # whole numbers, blank when unknown
+        shown = table.copy()
+        shown["Rating"] = [f"⭐ {x}" if pd.notna(x) else f"needs {RATING_MIN - c} more checked"
+                           for x, c in zip(table["Rating"], table["Checked"])]
+        st.dataframe(shown, hide_index=True)
+
+        rated = table.dropna(subset=["Rating"])
+        if len(rated) >= 2:
+            best = rated.sort_values("Rating", ascending=False).iloc[0]
+            st.success(f"Most punctual on {pick} so far: **{best['Airline']}** "
+                       f"({best['On time (%)']}% on time, {best['Checked']} flights checked)")
+        elif len(done):
+            st.info(f"Ratings unlock once an airline has {RATING_MIN} checked flights on a route. "
+                    f"We have {sched_days} day(s) of punctuality data so far, so check back as it grows.")
+
+        if pd.notna(air_min):
+            st.caption(f"Typical time in the air: about {air_min:.0f} min "
+                       f"(from {len(seen)} flights we saw take off and land).")
+
+        with st.expander("How we work this out"):
+            st.write(
+                f"**On time** = left within {DGCA_LATE} minutes of the scheduled departure, the same "
+                "line DGCA uses. We can't see pushback, only when the wheels leave the runway, so we "
+                f"subtract a taxi allowance for the departure airport ({o}: {allowance:.0f} min). "
+                "The allowance is the delay of that airport's fastest 20% of takeoffs, kept between "
+                "5 and 25 minutes, so treat on-time numbers as estimates.\n\n"
+                "Because every airline on a route uses the same airports, **comparing airlines on "
+                "the same route is fairer than comparing raw numbers across routes.**\n\n"
+                "**Typical delay** = the middle value (median) of the delay after taxi.\n\n"
+                f"**Rating** (out of 5), only once an airline has {RATING_MIN}+ checked flights on "
+                "the route: 60% on-time share, 25% typical delay (0 min scores full, 60+ scores "
+                "zero), 15% how much of the route it flies.\n\n"
+                "**Sources:** schedules from AeroDataBox, actual flights from adsb.lol (ODbL). "
+                f"Punctuality covers {sched_days} day(s): {matched_files[0][-14:-4]} to "
+                f"{matched_files[-1][-14:-4]}."
+            )
 
 # =====================================================================
 with tab_gaps:
