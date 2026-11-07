@@ -30,6 +30,9 @@ jobs:
       - name: Process new days
         run: python scripts/run_daily.py
 
+      - name: Match new days to schedules
+        run: python scripts/match_flights.py
+
       - name: Upload points files to a monthly release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,4 +52,5 @@ jobs:
           git config user.name "routegap-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/legs data/coverage_log.csv
+          git add data/matched 2>/dev/null || true
           git diff --cached --quiet || (git commit -m "Add flights for new days" && git pull --rebase && git push)

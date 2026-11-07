@@ -24,6 +24,19 @@ To switch it on: GitHub → **Settings → Secrets and variables → Actions →
 name `AERODATABOX_KEY`, value = your RapidAPI key. Optional **Variables**: `AIRPORTS`
 (e.g. `DEL,BOM,BLR`) and `AERODATABOX_HOST`. Without the key the job does nothing.
 
+## Matching (delays)
+
+`scripts/match_flights.py` pairs each scheduled domestic flight with the ADS-B flight that
+flew it (same registration, then same flight number, then same route + time) and saves
+`data/matched/YYYY-MM/matched_YYYY-MM-DD.csv`. Each flight is `matched`, `cancelled`
+or `not_observed` (never assumed cancelled). It runs inside both daily workflows.
+
+`runway_delay_min` = wheels-off minus scheduled gate departure, so it **includes taxi time**.
+Don't compare it with DGCA on-time figures until taxi time is calibrated.
+
+First check (6 Nov 2026): 99% of matched takeoff times were within 10 minutes of
+AeroDataBox's own runway times (543 flights).
+
 ## Setup (one time)
 
 1. Create a **public** GitHub repo and push this folder to it. Public repos get GitHub Actions for free.
@@ -40,6 +53,7 @@ To start from a different day, edit `START_DATE` in `scripts/run_daily.py`.
 | `scripts/build_legs.py` | Points → flights: origin, destination, times, airline, grade |
 | `scripts/run_daily.py` | Runs both for every new day; used by GitHub Actions |
 | `scripts/capture_schedules.py` | Yesterday's departure boards from AeroDataBox |
+| `scripts/match_flights.py` | Schedules + ADS-B flights → delays |
 
 Run by hand:
 

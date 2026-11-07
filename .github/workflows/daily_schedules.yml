@@ -36,11 +36,15 @@ jobs:
           DAY: ${{ github.event.inputs.day }}
         run: python scripts/capture_schedules.py
 
+      - name: Match new days to ADS-B flights
+        run: python scripts/match_flights.py
+
       - name: Commit new schedules
         run: |
           git config user.name "routegap-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/schedules 2>/dev/null || exit 0
+          git add data/schedules 2>/dev/null || true
+          git add data/matched 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "Add schedules"
           git pull --rebase && git push
