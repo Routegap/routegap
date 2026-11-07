@@ -193,46 +193,99 @@ with tab_report:
 # =====================================================================
 with tab_gaps:
 
-    st.header("Route gaps")
-    st.write("Routes mostly served by a single airline. More airlines on a route usually "
-             "means more choice for travellers, so these are spots where there could be room "
-             "for another option. Busiest routes first.")
+    import altair as alt
 
-    # for every route: total flights, and how many each airline flew
+    st.header("Route gaps")
+    st.write("Who flies each route, and how the flights are split between airlines. "
+             "Routes mostly served by one airline are spots where travellers have fewer "
+             "options, and where there could be room for another one.")
+
+    # for every route: how many flights each airline flew, and its share
     per_airline = df.groupby(["route", "airline"]).size().reset_index(name="flights")
+    per_airline["share"] = per_airline["flights"] / per_airline.groupby("route")["flights"].transform("sum")
+    per_airline = per_airline.sort_values(["route", "flights"], ascending=[True, False])
+
     totals = per_airline.groupby("route")["flights"].sum()
-    top = per_airline.sort_values("flights", ascending=False).drop_duplicates("route")
-    top = top.set_index("route")
+    main = per_airline.drop_duplicates("route").set_index("route")      # biggest airline per route
+    who = per_airline.groupby("route").apply(
+        lambda g: " · ".join(f"{a} {s:.0%}" if s >= 0.005 else f"{a} <1%"
+                          for a, s in zip(g["airline"], g["share"])))
 
     gaps = pd.DataFrame({
         "Route": totals.index,
-        "Flights seen": totals.values,
-        "Main airline": top.loc[totals.index, "airline"].values,
-        "Main airline's share (%)": (top.loc[totals.index, "flights"].values / totals.values * 100).round(),
+        "Flights per day": (totals.values / days).round(1),
+        "Who flies it": who.loc[totals.index].values,
+        "Main airline": main.loc[totals.index, "airline"].values,
+        "Main airline's share (%)": (main.loc[totals.index, "share"].values * 100).round().astype(int),
         "Airlines seen": per_airline.groupby("route").size().loc[totals.index].values,
+        "Flights seen": totals.values,
     })
-    gaps["Flights per day"] = (gaps["Flights seen"] / days).round(1)
 
-    c1, c2 = st.columns(2)
-    kind = c1.radio("Show", ["Served by one airline", "Mostly one airline (80%+)"])
-    min_flights = c2.number_input("At least this many flights", min_value=1, value=days)
+    c1, c2, c3 = st.columns(3)
+    kind = c1.radio("Show", ["All routes", "Mostly one airline (80%+)", "Served by one airline"])
+    airline_pick = c2.selectbox("Main airline", ["All airlines"] + sorted(gaps["Main airline"].unique()))
+    min_flights = c3.number_input("At least this many flights", min_value=1, value=days)
 
+    busy = gaps[gaps["Flights seen"] >= min_flights]
+    shown = busy
     if kind == "Served by one airline":
-        shown = gaps[gaps["Airlines seen"] == 1]
+        shown = shown[shown["Airlines seen"] == 1]
+    elif kind == "Mostly one airline (80%+)":
+        shown = shown[shown["Main airline's share (%)"] >= 80]
+    if airline_pick != "All airlines":
+        shown = shown[shown["Main airline"] == airline_pick]
+    shown = shown.sort_values("Flights seen", ascending=False)
+
+    # --- airlines side by side, over every route that passes the minimum ---
+    st.subheader("Airlines compared")
+    busy_routes = per_airline[per_airline["route"].isin(busy["Route"])]
+    summary = pd.DataFrame({
+        "Routes flown": busy_routes.groupby("airline")["route"].nunique(),
+        "Routes it flies alone": busy[busy["Airlines seen"] == 1]["Main airline"].value_counts(),
+        "Routes where it has 80%+": busy[busy["Main airline's share (%)"] >= 80]["Main airline"].value_counts(),
+        "Share of all flights (%)": (busy_routes.groupby("airline")["flights"].sum()
+                                     / busy_routes["flights"].sum() * 100).round(),
+    }).fillna(0).astype(int).sort_values("Routes flown", ascending=False)
+    summary.index.name = "Airline"
+    st.dataframe(summary)
+
+    # --- the stacked bars: each route split by airline ---
+    st.subheader(f"How each route is split ({len(shown)} routes match)")
+    if shown.empty:
+        st.write("No routes match these filters.")
     else:
-        shown = gaps[gaps["Main airline's share (%)"] >= 80]
-    shown = shown[shown["Flights seen"] >= min_flights].sort_values("Flights seen", ascending=False)
+        how_many = st.slider("Routes in the chart", 5, min(60, max(len(shown), 5)),
+                             min(20, len(shown)), key="gaps_how_many")
+        chart_routes = shown["Route"].head(how_many).tolist()
+        bars = per_airline[per_airline["route"].isin(chart_routes)].copy()
+        bars["Share (%)"] = (bars["share"] * 100).round()
 
-    st.write(f"**{len(shown)} routes** match.")
-    st.dataframe(shown, hide_index=True)
+        colours = {"IndiGo": "#3355cc", "Air India": "#d62828", "Air India Express": "#f77f00",
+                   "Akasa Air": "#8338ec", "SpiceJet": "#2a9d8f", "Alliance Air": "#6c757d",
+                   "Star Air": "#e9b200"}
+        names = sorted(bars["airline"].unique(), key=lambda a: list(colours).index(a) if a in colours else 99)
 
-    if not shown.empty:
-        st.bar_chart(shown["Main airline"].value_counts())
-        st.caption("Which airlines serve these routes.")
+        chart = alt.Chart(bars).mark_bar().encode(
+            y=alt.Y("route:N", sort=chart_routes, title=None, axis=alt.Axis(labelOverlap=False)),
+            x=alt.X("flights:Q", stack="normalize", title="Share of flights",
+                    axis=alt.Axis(format="%")),
+            color=alt.Color("airline:N", title="Airline",
+                            scale=alt.Scale(domain=names, range=[colours.get(a, "#999999") for a in names]),
+                            legend=alt.Legend(orient="bottom")),
+            order=alt.Order("flights:Q", sort="descending"),
+            tooltip=[alt.Tooltip("route:N", title="Route"), alt.Tooltip("airline:N", title="Airline"),
+                     alt.Tooltip("flights:Q", title="Flights seen"),
+                     alt.Tooltip("Share (%):Q", title="Share (%)")],
+        ).properties(height=max(30 * len(chart_routes), 150))
+        st.altair_chart(chart, width="stretch")
+        st.caption("Busiest routes at the top. Hover a bar to see the numbers.")
+
+        st.dataframe(shown.drop(columns=["Main airline", "Airlines seen"]), hide_index=True)
 
     st.info("This is based on the flights we could see. At airports with weaker coverage we "
             "might miss some flights, so check the Route map tab for each airport's coverage.")
-    st.caption(f"Default minimum = {days} flights, about one a day over the {days} days of data.")
+    st.caption(f"Default minimum = {days} flights, about one a day over the {days} days of data. "
+               "Source: adsb.lol (ODbL).")
 
 # =====================================================================
 with tab_map:
