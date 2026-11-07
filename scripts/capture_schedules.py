@@ -40,9 +40,10 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "data" / "schedules"
 
 DGCA_AIRPORTS = "DEL,BOM,BLR,HYD,MAA,CCU,COK,AMD,LKO,GAU"
-AIRPORTS = os.environ.get("AIRPORTS", DGCA_AIRPORTS).replace(" ", "").split(",")
-HOST = os.environ.get("AERODATABOX_HOST", "aerodatabox.p.rapidapi.com")
-KEY = os.environ.get("AERODATABOX_KEY", "")
+# "or" also covers settings that exist but are empty (GitHub passes blank variables as "")
+AIRPORTS = (os.environ.get("AIRPORTS") or DGCA_AIRPORTS).replace(" ", "").split(",")
+HOST = os.environ.get("AERODATABOX_HOST") or "aerodatabox.p.rapidapi.com"
+KEY = os.environ.get("AERODATABOX_KEY") or ""
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
