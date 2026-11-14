@@ -42,3 +42,4 @@ date,source,airline_legs,complete,complete_inferred,partial,cruise_only,routes_b
 2026-11-10,prod,2544,559,401,1374,210,272
 2026-11-11,prod,2550,425,559,1357,209,257
 2026-11-12,prod,2517,531,359,1400,227,254
+2026-11-13,prod,2558,406,549,1338,265,275
